@@ -67,7 +67,16 @@ class RTClient:
                 payload = response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RTError(f"RT returned HTTP {exc.code}: {detail}") from None
+            endpoint = urlsplit(url).path
+            hint = (
+                " Check the username/password and confirm RT REST2 allows Basic authentication."
+                if exc.code == 401
+                else ""
+            )
+            raise RTError(
+                f"RT returned HTTP {exc.code} for {request.get_method()} {endpoint}: "
+                f"{detail}.{hint}"
+            ) from None
         except URLError as exc:
             raise RTError(f"Could not connect to RT: {exc.reason}") from None
 
@@ -217,18 +226,24 @@ def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]
 
 
 def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
+    print(f"Connecting to RT REST2 at {client.api_base}", file=sys.stderr)
+    print(f"Resolving queue {queue_arg!r}...", file=sys.stderr)
     queue = load_queue(client, queue_arg)
     queue_id = str(queue["id"])
+    print(f"Resolved queue {queue.get('Name', queue_arg)!r} (ID {queue_id})", file=sys.stderr)
+    print("Searching for tickets in the queue...", file=sys.stderr)
     tickets = client.collection(
         "tickets",
         {"query": f"Queue = '{queue_id}'", "fields": "Subject,Created,Queue"},
     )
+    print(f"Found {len(tickets)} ticket(s)", file=sys.stderr)
 
     report_tickets: list[dict[str, Any]] = []
-    for item in tickets:
+    for index, item in enumerate(tickets, start=1):
         ticket_id = value_id(item)
         if ticket_id is None:
             continue
+        print(f"Processing ticket {index}/{len(tickets)} (ID {ticket_id})...", file=sys.stderr)
         details = client.get_json("ticket/" + quote(ticket_id, safe=""))
         attachments = ticket_attachments(client, ticket_id)
         updates, updates_md5 = ticket_updates(client, ticket_id)
@@ -243,6 +258,7 @@ def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
             "reply_comment_content_md5": updates_md5,
         })
 
+    print("Finished processing tickets; assembling report...", file=sys.stderr)
     report_tickets.sort(key=lambda ticket: int(ticket["id"]) if ticket["id"].isdigit() else -1)
     attachment_sizes = [
         attachment["size_bytes"]
@@ -297,8 +313,10 @@ def main() -> int:
         rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
+            print(f"Report written to {args.output}", file=sys.stderr)
         else:
             sys.stdout.write(rendered)
+            print("Report written to standard output", file=sys.stderr)
     except (RTError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
