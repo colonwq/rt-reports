@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""Report ticket attachments and reply/comment checksums from RT REST2."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import getpass
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import Request, urlopen
+
+
+API_SUFFIX = "/REST/2.0"
+PAGE_SIZE = 100
+UPDATE_TYPES = {"correspond", "comment"}
+
+
+class RTError(Exception):
+    """An RT API or response error suitable for displaying to the user."""
+
+
+class RTClient:
+    def __init__(self, server: str, username: str, password: str, timeout: int) -> None:
+        if "://" not in server:
+            server = "https://" + server
+        parsed = urlsplit(server.rstrip("/"))
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise RTError("--server must be a hostname or an http(s) URL")
+        if parsed.query or parsed.fragment:
+            raise RTError("--server must not include a query string or fragment")
+
+        root = parsed.geturl().rstrip("/")
+        self.api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
+        self.username = username
+        self.password = password
+        self.timeout = timeout
+
+    def get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        url = self.api_base + "/" + path.lstrip("/")
+        if params:
+            url += "?" + urlencode(params, doseq=True)
+        return self._request_json(url)
+
+    def _request_json(self, url: str) -> Any:
+        credentials = base64.b64encode(
+            f"{self.username}:{self.password}".encode("utf-8")
+        ).decode("ascii")
+        request = Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "Authorization": "Basic " + credentials,
+            },
+        )
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                payload = response.read()
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RTError(f"RT returned HTTP {exc.code}: {detail}") from None
+        except URLError as exc:
+            raise RTError(f"Could not connect to RT: {exc.reason}") from None
+
+        try:
+            return json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RTError(f"RT returned an invalid JSON response: {exc}") from None
+
+    def collection(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            page_params = dict(params or {})
+            page_params.update({"page": page, "per_page": PAGE_SIZE})
+            result = self.get_json(path, page_params)
+            if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+                raise RTError(f"Unexpected collection response from {path}")
+            page_items = result["items"]
+            items.extend(item for item in page_items if isinstance(item, dict))
+
+            pages = result.get("pages")
+            if pages is not None:
+                if page >= int(pages):
+                    break
+            elif len(page_items) < PAGE_SIZE:
+                break
+            page += 1
+        return items
+
+
+def md5_hex(data: bytes) -> str | None:
+    try:
+        return hashlib.md5(data).hexdigest()
+    except (ValueError, TypeError):
+        return None
+
+
+def value_id(value: Any) -> str | None:
+    if isinstance(value, dict):
+        value = value.get("id")
+    return str(value) if value is not None else None
+
+
+def load_queue(client: RTClient, queue: str) -> dict[str, Any]:
+    encoded_queue = quote(queue, safe="")
+    result = client.get_json("queue/" + encoded_queue)
+    if not isinstance(result, dict) or not result.get("id"):
+        raise RTError(f"Could not resolve queue {queue!r}")
+    return result
+
+
+def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any]], str | None]:
+    history = client.collection(f"ticket/{quote(ticket_id, safe='')}/history")
+    updates: list[dict[str, Any]] = []
+    content_by_id: dict[str, bytes] = {}
+    all_content_available = True
+
+    for entry in history:
+        update_type = str(entry.get("Type", entry.get("type", "")))
+        if update_type.lower() not in UPDATE_TYPES:
+            continue
+
+        transaction_id = value_id(entry)
+        if transaction_id is None:
+            updates.append({
+                "id": None,
+                "type": update_type,
+                "created": entry.get("Created"),
+                "content_md5": None,
+                "content_size_bytes": None,
+            })
+            all_content_available = False
+            continue
+
+        transaction = client.get_json("transaction/" + quote(transaction_id, safe=""))
+        content = transaction.get("Content") if isinstance(transaction, dict) else None
+        content_bytes = content.encode("utf-8") if isinstance(content, str) else None
+        updates.append({
+            "id": transaction_id,
+            "type": update_type,
+            "created": transaction.get("Created", entry.get("Created")),
+            "content_md5": md5_hex(content_bytes) if content_bytes is not None else None,
+            "content_size_bytes": len(content_bytes) if content_bytes is not None else None,
+        })
+        if content_bytes is None:
+            all_content_available = False
+        else:
+            content_by_id[transaction_id] = content_bytes
+
+    updates.sort(key=lambda update: int(update["id"]) if str(update["id"]).isdigit() else -1)
+    try:
+        aggregate = hashlib.md5()
+        for update in updates:
+            content_bytes = content_by_id.get(update["id"])
+            if content_bytes is not None:
+                aggregate.update(content_bytes)
+        aggregate_md5 = aggregate.hexdigest() if all_content_available else None
+    except ValueError:
+        aggregate_md5 = None
+    return updates, aggregate_md5
+
+
+def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]:
+    entries = client.collection(f"ticket/{quote(ticket_id, safe='')}/attachments")
+    attachments: list[dict[str, Any]] = []
+    for entry in entries:
+        attachment_id = value_id(entry)
+        detail = (
+            client.get_json("attachment/" + quote(attachment_id, safe=""))
+            if attachment_id is not None
+            else entry
+        )
+        content = detail.get("Content") if isinstance(detail, dict) else None
+        size_bytes: int | None = None
+        checksum: str | None = None
+        error: str | None = None
+
+        if isinstance(content, str):
+            try:
+                raw_content = base64.b64decode("".join(content.split()), validate=True)
+                size_bytes = len(raw_content)
+                checksum = md5_hex(raw_content)
+            except (ValueError, TypeError):
+                error = "Attachment content was not valid base64"
+        else:
+            reported_size = detail.get("ContentLength") if isinstance(detail, dict) else None
+            if reported_size is not None:
+                try:
+                    size_bytes = int(reported_size)
+                except (TypeError, ValueError):
+                    pass
+            error = "Attachment content was not available"
+
+        attachments.append({
+            "id": attachment_id,
+            "filename": detail.get("Filename", detail.get("FileName")) if isinstance(detail, dict) else None,
+            "content_type": detail.get("ContentType", detail.get("FileType")) if isinstance(detail, dict) else None,
+            "size_bytes": size_bytes,
+            "md5": checksum,
+            "error": error,
+        })
+    return attachments
+
+
+def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
+    queue = load_queue(client, queue_arg)
+    queue_id = str(queue["id"])
+    tickets = client.collection(
+        "tickets",
+        {"query": f"Queue = '{queue_id}'", "fields": "Subject,Created,Queue"},
+    )
+
+    report_tickets: list[dict[str, Any]] = []
+    for item in tickets:
+        ticket_id = value_id(item)
+        if ticket_id is None:
+            continue
+        details = client.get_json("ticket/" + quote(ticket_id, safe=""))
+        attachments = ticket_attachments(client, ticket_id)
+        updates, updates_md5 = ticket_updates(client, ticket_id)
+        report_tickets.append({
+            "id": ticket_id,
+            "subject": details.get("Subject", item.get("Subject")),
+            "created": details.get("Created", item.get("Created")),
+            "attachment_count": len(attachments),
+            "attachments": attachments,
+            "reply_comment_count": len(updates),
+            "reply_comment_updates": updates,
+            "reply_comment_content_md5": updates_md5,
+        })
+
+    report_tickets.sort(key=lambda ticket: int(ticket["id"]) if ticket["id"].isdigit() else -1)
+    attachment_sizes = [
+        attachment["size_bytes"]
+        for ticket in report_tickets
+        for attachment in ticket["attachments"]
+        if attachment["size_bytes"] is not None
+    ]
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "server": client.api_base,
+        "queue": {"id": queue_id, "name": queue.get("Name")},
+        "ticket_count": len(report_tickets),
+        "attachment_count": sum(ticket["attachment_count"] for ticket in report_tickets),
+        "attachment_size_bytes": sum(attachment_sizes),
+        "tickets": report_tickets,
+        "checksum_notes": {
+            "attachment_md5": "MD5 of decoded raw attachment bytes.",
+            "update_md5": "MD5 of UTF-8 transaction Content; aggregate concatenates available contents in transaction ID order with no separators.",
+            "unavailable_content": "A null checksum means RT did not return content or MD5 was unavailable.",
+        },
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Report attachments and reply/comment checksums for every ticket in an RT queue."
+    )
+    parser.add_argument("queue", help="RT queue name or numeric ID")
+    parser.add_argument("--server", required=True, help="RT hostname or base URL, optionally including an installation path")
+    parser.add_argument("--username", required=True, help="RT username")
+    parser.add_argument(
+        "--password",
+        help="RT password (visible in process listings); omit to enter it securely at the prompt",
+    )
+    parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
+    parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    password = args.password if args.password is not None else getpass.getpass("RT password: ")
+    try:
+        client = RTClient(args.server, args.username, password, args.timeout)
+        if urlsplit(client.api_base).scheme != "https":
+            print("Warning: credentials are being sent without HTTPS.", file=sys.stderr)
+        report = build_report(client, args.queue)
+        rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            sys.stdout.write(rendered)
+    except (RTError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
