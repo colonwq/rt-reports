@@ -8,13 +8,14 @@ import base64
 import getpass
 import hashlib
 import json
+import ssl
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPSHandler, Request, build_opener
 
 
 API_SUFFIX = "/REST/2.0"
@@ -27,7 +28,7 @@ class RTError(Exception):
 
 
 class RTClient:
-    def __init__(self, server: str, username: str, password: str, timeout: int) -> None:
+    def __init__(self, server: str, username: str, password: str, timeout: int, insecure: bool) -> None:
         if "://" not in server:
             server = "https://" + server
         parsed = urlsplit(server.rstrip("/"))
@@ -41,6 +42,8 @@ class RTClient:
         self.username = username
         self.password = password
         self.timeout = timeout
+        handlers = [HTTPSHandler(context=ssl._create_unverified_context())] if insecure else []
+        self.opener = build_opener(*handlers)
 
     def get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = self.api_base + "/" + path.lstrip("/")
@@ -60,7 +63,7 @@ class RTClient:
             },
         )
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with self.opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -276,6 +279,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
+    parser.add_argument(
+        "-k", "--insecure", action="store_true",
+        help="accept HTTPS certificates without validation (insecure; use only when necessary)",
+    )
     return parser.parse_args()
 
 
@@ -283,7 +290,7 @@ def main() -> int:
     args = parse_args()
     password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        client = RTClient(args.server, args.username, password, args.timeout)
+        client = RTClient(args.server, args.username, password, args.timeout, args.insecure)
         if urlsplit(client.api_base).scheme != "https":
             print("Warning: credentials are being sent without HTTPS.", file=sys.stderr)
         report = build_report(client, args.queue)

@@ -19,6 +19,14 @@ python rt_queue_audit_rt44.py "General" --server https://rt.example.com --userna
 
 The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings.
 
+If the RT server uses a certificate that cannot be validated, add `-k` (or `--insecure`) to accept it:
+
+```powershell
+python rt_queue_audit_rt44.py "General" --server https://rt.example.com --username alice -k
+```
+
+This disables TLS certificate validation and makes the connection vulnerable to interception. Prefer installing or trusting the correct CA certificate instead.
+
 REST 1.0 reports attachment data through a legacy content endpoint. The script hashes the returned content bytes; depending on RT's encoding of a particular attachment, those bytes may not reproduce the original uploaded binary exactly.
 
 ## RT 5.0.10 Usage
@@ -34,6 +42,8 @@ The script prompts for the password without echoing it. To save the JSON report 
 ```powershell
 python rt_queue_audit.py 3 --server https://rt.example.com/rt --username alice --output rt-report.json
 ```
+
+The RT 5 script supports the same `-k`/`--insecure` option if certificate validation must be disabled. The TLS warning above applies.
 
 A password can also be supplied explicitly on the command line:
 
@@ -53,6 +63,7 @@ Avoid the `--password` form where possible: command-line arguments can be expose
 | `--password` | Optional RT password. If omitted, the script securely prompts for it. |
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
 | `--timeout` | HTTP timeout in seconds; defaults to `30`. |
+| `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
 
 ## Report Contents
 

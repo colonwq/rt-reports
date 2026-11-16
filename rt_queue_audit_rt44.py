@@ -9,13 +9,14 @@ import hashlib
 import http.cookiejar
 import json
 import re
+import ssl
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import HTTPCookieProcessor, Request, build_opener
+from urllib.request import HTTPSHandler, HTTPCookieProcessor, Request, build_opener
 
 
 API_SUFFIX = "/REST/1.0"
@@ -28,7 +29,7 @@ class RTError(Exception):
 
 
 class RTClient:
-    def __init__(self, server: str, username: str, password: str, timeout: int) -> None:
+    def __init__(self, server: str, username: str, password: str, timeout: int, insecure: bool) -> None:
         if "://" not in server:
             server = "https://" + server
         parsed = urlsplit(server.rstrip("/"))
@@ -40,7 +41,10 @@ class RTClient:
         root = parsed.geturl().rstrip("/")
         self.api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
         self.timeout = timeout
-        self.opener = build_opener(HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        handlers = [HTTPCookieProcessor(http.cookiejar.CookieJar())]
+        if insecure:
+            handlers.append(HTTPSHandler(context=ssl._create_unverified_context()))
+        self.opener = build_opener(*handlers)
         self.login(username, password)
 
     def login(self, username: str, password: str) -> None:
@@ -310,6 +314,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
+    parser.add_argument(
+        "-k", "--insecure", action="store_true",
+        help="accept HTTPS certificates without validation (insecure; use only when necessary)",
+    )
     return parser.parse_args()
 
 
@@ -317,7 +325,7 @@ def main() -> int:
     args = parse_args()
     password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        client = RTClient(args.server, args.username, password, args.timeout)
+        client = RTClient(args.server, args.username, password, args.timeout, args.insecure)
         if urlsplit(client.api_base).scheme != "https":
             print("Warning: credentials are being sent without HTTPS.", file=sys.stderr)
         report = build_report(client, args.queue)
