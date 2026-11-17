@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import getpass
 import hashlib
 import json
 import ssl
@@ -28,7 +27,7 @@ class RTError(Exception):
 
 
 class RTClient:
-    def __init__(self, server: str, username: str, password: str, timeout: int, insecure: bool) -> None:
+    def __init__(self, server: str, token: str, timeout: int, insecure: bool) -> None:
         if "://" not in server:
             server = "https://" + server
         parsed = urlsplit(server.rstrip("/"))
@@ -39,8 +38,7 @@ class RTClient:
 
         root = parsed.geturl().rstrip("/")
         self.api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
-        self.username = username
-        self.password = password
+        self.token = token
         self.timeout = timeout
         handlers = [HTTPSHandler(context=ssl._create_unverified_context())] if insecure else []
         self.opener = build_opener(*handlers)
@@ -52,14 +50,11 @@ class RTClient:
         return self._request_json(url)
 
     def _request_json(self, url: str) -> Any:
-        credentials = base64.b64encode(
-            f"{self.username}:{self.password}".encode("utf-8")
-        ).decode("ascii")
         request = Request(
             url,
             headers={
                 "Accept": "application/json",
-                "Authorization": "Basic " + credentials,
+                "Authorization": "token " + self.token,
             },
         )
         try:
@@ -69,7 +64,7 @@ class RTClient:
             detail = exc.read().decode("utf-8", errors="replace")
             endpoint = urlsplit(url).path
             hint = (
-                " Check the username/password and confirm RT REST2 allows Basic authentication."
+                " Check that the token is valid, active, unexpired, and that RT or its web server passes the Authorization header through."
                 if exc.code == 401
                 else ""
             )
@@ -288,10 +283,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("queue", help="RT queue name or numeric ID")
     parser.add_argument("--server", required=True, help="RT hostname or base URL, optionally including an installation path")
-    parser.add_argument("--username", required=True, help="RT username")
     parser.add_argument(
-        "--password",
-        help="RT password (visible in process listings); omit to enter it securely at the prompt",
+        "--token", required=True,
+        help="RT authentication token (visible in process listings and shell history)",
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
@@ -304,11 +298,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        client = RTClient(args.server, args.username, password, args.timeout, args.insecure)
+        client = RTClient(args.server, args.token, args.timeout, args.insecure)
         if urlsplit(client.api_base).scheme != "https":
-            print("Warning: credentials are being sent without HTTPS.", file=sys.stderr)
+            print("Warning: the RT token is being sent without HTTPS.", file=sys.stderr)
         report = build_report(client, args.queue)
         rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
         if args.output:

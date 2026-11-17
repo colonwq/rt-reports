@@ -34,24 +34,18 @@ REST 1.0 reports attachment data through a legacy content endpoint. The script h
 The queue is the positional argument and may be its name or numeric ID. If `--server` is given as a bare hostname, the script assumes HTTPS and appends `/REST/2.0`. A server URL may include an RT installation path, for example `https://rt.example.com/rt`.
 
 ```powershell
-python rt_queue_audit.py "General" --server https://rt.example.com --username alice
+python rt_queue_audit.py "General" --server https://rt.example.com --token "RT_TOKEN"
 ```
 
-The script prompts for the password without echoing it. To save the JSON report to a file, use `--output`:
+To save the JSON report to a file, use `--output`:
 
 ```powershell
-python rt_queue_audit.py 3 --server https://rt.example.com/rt --username alice --output rt-report.json
+python rt_queue_audit.py 3 --server https://rt.example.com/rt --token "RT_TOKEN" --output rt-report.json
 ```
 
 The RT 5 script supports the same `-k`/`--insecure` option if certificate validation must be disabled. The TLS warning above applies.
 
-A password can also be supplied explicitly on the command line:
-
-```powershell
-python rt_queue_audit.py "General" --server https://rt.example.com --username alice --password "your-password" --output rt-report.json
-```
-
-Avoid the `--password` form where possible: command-line arguments can be exposed in shell history or process listings. The interactive prompt is safer.
+The RT 5 script uses RT's token authentication header (`Authorization: token ...`); it no longer accepts a username/password. Treat the token as a secret: command-line arguments can be exposed in shell history or process listings. Use HTTPS for requests.
 
 ### Options
 
@@ -59,8 +53,7 @@ Avoid the `--password` form where possible: command-line arguments can be expose
 | --- | --- |
 | `queue` | Required queue name or ID. |
 | `--server` | Required RT hostname or base URL. A missing scheme defaults to HTTPS. |
-| `--username` | Required RT username. |
-| `--password` | Optional RT password. If omitted, the script securely prompts for it. |
+| `--token` | Required RT authentication token. |
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
 | `--timeout` | HTTP timeout in seconds; defaults to `30`. |
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
