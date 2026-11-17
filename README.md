@@ -19,6 +19,8 @@ python rt_queue_audit_rt44.py "General" --server https://rt.example.com --userna
 
 The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings.
 
+Add `--debug` to print request paths and HTTP/RT response statuses to standard error while the report is generated. Debug output does not include credentials, cookies, or response bodies.
+
 If the RT server uses a certificate that cannot be validated, add `-k` (or `--insecure`) to accept it:
 
 ```powershell

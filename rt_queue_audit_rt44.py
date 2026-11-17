@@ -29,7 +29,15 @@ class RTError(Exception):
 
 
 class RTClient:
-    def __init__(self, server: str, username: str, password: str, timeout: int, insecure: bool) -> None:
+    def __init__(
+        self,
+        server: str,
+        username: str,
+        password: str,
+        timeout: int,
+        insecure: bool,
+        debug: bool = False,
+    ) -> None:
         if "://" not in server:
             server = "https://" + server
         parsed = urlsplit(server.rstrip("/"))
@@ -41,6 +49,7 @@ class RTClient:
         root = parsed.geturl().rstrip("/")
         self.api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
         self.timeout = timeout
+        self.debug = debug
         handlers = [HTTPCookieProcessor(http.cookiejar.CookieJar())]
         if insecure:
             handlers.append(HTTPSHandler(context=ssl._create_unverified_context()))
@@ -49,7 +58,13 @@ class RTClient:
 
     def login(self, username: str, password: str) -> None:
         # REST 1.0 uses an RT session cookie, not HTTP Basic authentication.
+        self.log_debug("POST", "", "starting REST 1.0 login; credentials omitted")
         self.request_bytes("", form={"user": username, "pass": password})
+
+    def log_debug(self, method: str, path: str, message: str) -> None:
+        if self.debug:
+            endpoint = "/" + path.lstrip("/")
+            print(f"DEBUG {method} {endpoint}: {message}", file=sys.stderr)
 
     def request_bytes(
         self,
@@ -69,17 +84,27 @@ class RTClient:
         if data is not None:
             request.add_header("Content-Type", "application/x-www-form-urlencoded")
 
+        self.log_debug(request.get_method(), urlsplit(url).path.removeprefix(self.api_base.split("/REST/")[0]), "requesting")
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
+                http_status = response.status
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RTError(f"RT returned HTTP {exc.code}: {detail}") from None
+            endpoint = urlsplit(url).path
+            self.log_debug(request.get_method(), endpoint, f"HTTP {exc.code}")
+            raise RTError(f"RT returned HTTP {exc.code} for {request.get_method()} {endpoint}: {detail}") from None
         except URLError as exc:
             raise RTError(f"Could not connect to RT: {exc.reason}") from None
 
         first_line = payload.splitlines()[0].decode("ascii", errors="ignore") if payload else ""
         status = re.match(r"^RT/\S+\s+(\d{3})\b", first_line)
+        rt_status = f"RT {status.group(1)}" if status else "no RT status line"
+        self.log_debug(
+            request.get_method(),
+            urlsplit(url).path,
+            f"HTTP {http_status}, {rt_status}, {len(payload)} response bytes",
+        )
         if status and int(status.group(1)) >= 400:
             raise RTError(f"RT returned {first_line}: {payload.decode('utf-8', errors='replace')}")
         return payload
@@ -259,11 +284,17 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
 
 
 def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
+    print(f"Starting queue audit against {client.api_base}", file=sys.stderr)
+    print(f"Resolving queue {queue_arg!r}...", file=sys.stderr)
     queue_name, queue_id = resolve_queue(client, queue_arg)
+    print(f"Using queue {queue_name!r}" + (f" (ID {queue_id})" if queue_id else ""), file=sys.stderr)
+    print("Searching for tickets in the queue...", file=sys.stderr)
     ids = list_ticket_ids(client, queue_name)
+    print(f"Found {len(ids)} ticket(s)", file=sys.stderr)
     tickets: list[dict[str, Any]] = []
 
-    for ticket_id in ids:
+    for index, ticket_id in enumerate(ids, start=1):
+        print(f"Processing ticket {index}/{len(ids)} (ID {ticket_id})...", file=sys.stderr)
         fields = parse_fields(client.get_text(f"ticket/{quote(ticket_id, safe='')}/show"))
         attachments = ticket_attachments(client, ticket_id)
         updates, updates_md5 = ticket_updates(client, ticket_id)
@@ -278,6 +309,7 @@ def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
             "reply_comment_content_md5": updates_md5,
         })
 
+    print("Finished processing tickets; assembling report...", file=sys.stderr)
     tickets.sort(key=lambda ticket: int(ticket["id"]))
     sizes = [
         attachment["size_bytes"]
@@ -314,6 +346,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
+    parser.add_argument("--debug", action="store_true", help="log REST request paths and response statuses to standard error")
     parser.add_argument(
         "-k", "--insecure", action="store_true",
         help="accept HTTPS certificates without validation (insecure; use only when necessary)",
@@ -325,15 +358,18 @@ def main() -> int:
     args = parse_args()
     password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        client = RTClient(args.server, args.username, password, args.timeout, args.insecure)
+        print("Connecting and authenticating with RT REST 1.0...", file=sys.stderr)
+        client = RTClient(args.server, args.username, password, args.timeout, args.insecure, args.debug)
         if urlsplit(client.api_base).scheme != "https":
-            print("Warning: credentials are being sent without HTTPS.", file=sys.stderr)
+            print("Warning: RT credentials are being sent without HTTPS.", file=sys.stderr)
         report = build_report(client, args.queue)
         rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
+            print(f"Report written to {args.output}", file=sys.stderr)
         else:
             sys.stdout.write(rendered)
+            print("Report written to standard output", file=sys.stderr)
     except (RTError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
