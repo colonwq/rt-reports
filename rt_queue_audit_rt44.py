@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+from contextlib import nullcontext
 import hashlib
 import http.cookiejar
 import json
@@ -26,6 +27,63 @@ UPDATE_TYPES = {"correspond", "comment"}
 
 class RTError(Exception):
     """An RT API or response error suitable for displaying to the user."""
+
+
+class JSONReportWriter:
+    def __init__(self, stream: Any, server: str) -> None:
+        self.stream = stream
+        self.server = server
+        self.queue: dict[str, Any] | None = None
+        self.ticket_count = 0
+        self.attachment_count = 0
+        self.attachment_size_bytes = 0
+        self.closed = False
+        stream.write("{\n")
+        stream.write(f'  "generated_at": {json.dumps(datetime.now(timezone.utc).isoformat())},\n')
+        stream.write(f'  "server": {json.dumps(server)},\n')
+        stream.write('  "tickets": [')
+        stream.flush()
+
+    def set_queue(self, queue: dict[str, Any]) -> None:
+        self.queue = queue
+
+    def write_ticket(self, ticket: dict[str, Any]) -> None:
+        if self.closed:
+            raise RTError("Cannot write to a closed report")
+        rendered = json.dumps(ticket, indent=2, ensure_ascii=False)
+        if self.ticket_count:
+            self.stream.write(",")
+        self.stream.write("\n" + "\n".join("  " + line for line in rendered.splitlines()))
+        self.stream.flush()
+        self.ticket_count += 1
+        self.attachment_count += int(ticket.get("attachment_count", 0))
+        self.attachment_size_bytes += sum(
+            attachment["size_bytes"]
+            for attachment in ticket.get("attachments", [])
+            if attachment.get("size_bytes") is not None
+        )
+
+    def close(self, error: str | None = None) -> None:
+        if self.closed:
+            return
+        self.stream.write("\n  ],\n")
+        self.stream.write(f'  "queue": {json.dumps(self.queue, ensure_ascii=False)},\n')
+        self.stream.write(f'  "ticket_count": {self.ticket_count},\n')
+        self.stream.write(f'  "attachment_count": {self.attachment_count},\n')
+        self.stream.write(f'  "attachment_size_bytes": {self.attachment_size_bytes},\n')
+        self.stream.write(
+            '  "checksum_notes": {\n'
+            '    "attachment_md5": "MD5 of the bytes returned by the REST 1.0 attachment /content endpoint; original binary reconstruction can vary by RT encoding.",\n'
+            '    "update_md5": "MD5 of UTF-8 history Content; aggregate concatenates available contents in transaction ID order with no separators.",\n'
+            '    "unavailable_content": "A null checksum means content was unavailable or MD5 could not be calculated."\n'
+            '  },\n'
+        )
+        self.stream.write(f'  "complete": {json.dumps(error is None)}')
+        if error is not None:
+            self.stream.write(f',\n  "error": {json.dumps(error, ensure_ascii=False)}')
+        self.stream.write("\n}\n")
+        self.stream.flush()
+        self.closed = True
 
 
 class RTClient:
@@ -283,22 +341,21 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
     return updates, aggregate_md5
 
 
-def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
+def build_report(client: RTClient, queue_arg: str, writer: JSONReportWriter) -> None:
     print(f"Starting queue audit against {client.api_base}", file=sys.stderr)
     print(f"Resolving queue {queue_arg!r}...", file=sys.stderr)
     queue_name, queue_id = resolve_queue(client, queue_arg)
+    writer.set_queue({"id": queue_id, "name": queue_name})
     print(f"Using queue {queue_name!r}" + (f" (ID {queue_id})" if queue_id else ""), file=sys.stderr)
     print("Searching for tickets in the queue...", file=sys.stderr)
     ids = list_ticket_ids(client, queue_name)
     print(f"Found {len(ids)} ticket(s)", file=sys.stderr)
-    tickets: list[dict[str, Any]] = []
-
     for index, ticket_id in enumerate(ids, start=1):
         print(f"Processing ticket {index}/{len(ids)} (ID {ticket_id})...", file=sys.stderr)
         fields = parse_fields(client.get_text(f"ticket/{quote(ticket_id, safe='')}/show"))
         attachments = ticket_attachments(client, ticket_id)
         updates, updates_md5 = ticket_updates(client, ticket_id)
-        tickets.append({
+        writer.write_ticket({
             "id": ticket_id,
             "subject": fields.get("Subject"),
             "created": fields.get("Created"),
@@ -309,28 +366,7 @@ def build_report(client: RTClient, queue_arg: str) -> dict[str, Any]:
             "reply_comment_content_md5": updates_md5,
         })
 
-    print("Finished processing tickets; assembling report...", file=sys.stderr)
-    tickets.sort(key=lambda ticket: int(ticket["id"]))
-    sizes = [
-        attachment["size_bytes"]
-        for ticket in tickets
-        for attachment in ticket["attachments"]
-        if attachment["size_bytes"] is not None
-    ]
-    return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "server": client.api_base,
-        "queue": {"id": queue_id, "name": queue_name},
-        "ticket_count": len(tickets),
-        "attachment_count": sum(ticket["attachment_count"] for ticket in tickets),
-        "attachment_size_bytes": sum(sizes),
-        "tickets": tickets,
-        "checksum_notes": {
-            "attachment_md5": "MD5 of the bytes returned by the REST 1.0 attachment /content endpoint; original binary reconstruction can vary by RT encoding.",
-            "update_md5": "MD5 of UTF-8 history Content; aggregate concatenates available contents in transaction ID order with no separators.",
-            "unavailable_content": "A null checksum means content was unavailable or MD5 could not be calculated.",
-        },
-    }
+    print(f"Finished processing {writer.ticket_count} ticket(s)", file=sys.stderr)
 
 
 def parse_args() -> argparse.Namespace:
@@ -358,18 +394,27 @@ def main() -> int:
     args = parse_args()
     password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        print("Connecting and authenticating with RT REST 1.0...", file=sys.stderr)
-        client = RTClient(args.server, args.username, password, args.timeout, args.insecure, args.debug)
-        if urlsplit(client.api_base).scheme != "https":
-            print("Warning: RT credentials are being sent without HTTPS.", file=sys.stderr)
-        report = build_report(client, args.queue)
-        rendered = json.dumps(report, indent=2, ensure_ascii=False) + "\n"
-        if args.output:
-            args.output.write_text(rendered, encoding="utf-8")
-            print(f"Report written to {args.output}", file=sys.stderr)
-        else:
-            sys.stdout.write(rendered)
-            print("Report written to standard output", file=sys.stderr)
+        output_context = args.output.open("w", encoding="utf-8") if args.output else nullcontext(sys.stdout)
+        with output_context as output_stream:
+            root = args.server if "://" in args.server else "https://" + args.server
+            root = root.rstrip("/")
+            api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
+            writer = JSONReportWriter(output_stream, api_base)
+            try:
+                print("Connecting and authenticating with RT REST 1.0...", file=sys.stderr)
+                client = RTClient(args.server, args.username, password, args.timeout, args.insecure, args.debug)
+                if urlsplit(client.api_base).scheme != "https":
+                    print("Warning: RT credentials are being sent without HTTPS.", file=sys.stderr)
+                build_report(client, args.queue, writer)
+            except BaseException as exc:
+                writer.close(f"{type(exc).__name__}: {exc}")
+                raise
+            else:
+                writer.close()
+            if args.output:
+                print(f"Report written to {args.output}", file=sys.stderr)
+            else:
+                print("Report written to standard output", file=sys.stderr)
     except (RTError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

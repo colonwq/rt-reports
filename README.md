@@ -31,6 +31,16 @@ This disables TLS certificate validation and makes the connection vulnerable to 
 
 REST 1.0 reports attachment data through a legacy content endpoint. The script hashes the returned content bytes; depending on RT's encoding of a particular attachment, those bytes may not reproduce the original uploaded binary exactly.
 
+## Compare Reports
+
+After generating reports from both systems, compare them with `compare_rt_reports.py`:
+
+```powershell
+python compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
+```
+
+The comparison JSON summarizes matched and missing tickets, attachments missing from either report, attachments with changed checksums, and reply/comment messages with differing content hashes or present on only one side. Tickets are matched by ID first, then by a unique subject and creation-time pair if IDs differ. Attachments are matched by MD5, then filename and size; messages are paired by type and creation time. `from_right` means present only in the first (left) input; `from_left` means present only in the second (right) input. RT 4.4 attachment encoding can produce checksum differences even when source files are the same, so review those differences with the RT 4.4 encoding caveat above.
+
 ## RT 5.0.10 Usage
 
 The queue is the positional argument and may be its name or numeric ID. If `--server` is given as a bare hostname, the script assumes HTTPS and appends `/REST/2.0`. A server URL may include an RT installation path, for example `https://rt.example.com/rt`.
@@ -63,6 +73,8 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 ## Report Contents
 
 The JSON report includes queue details and a ticket entry for each matching ticket. Each ticket contains its ID, subject, creation time, attachment count and attachment records, plus reply/comment transaction records.
+
+Both audit scripts stream each completed ticket directly to the output rather than retaining the full report in memory. Summary counts and sizes are written when processing finishes. If an error occurs after output has started, the scripts close the JSON structure and mark it with `"complete": false` plus an `error` message; tickets completed before the failure remain available. A normally finished report has `"complete": true`.
 
 Each attachment record includes its ID, filename, content type, size in bytes, and MD5 checksum. The total attachment count and the sum of available attachment sizes are included at the report level.
 
