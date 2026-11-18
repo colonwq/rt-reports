@@ -76,6 +76,14 @@ The JSON report includes queue details and a ticket entry for each matching tick
 
 Both audit scripts stream each completed ticket directly to the output rather than retaining the full report in memory. Summary counts and sizes are written when processing finishes. If an error occurs after output has started, the scripts close the JSON structure and mark it with `"complete": false` plus an `error` message; tickets completed before the failure remain available. A normally finished report has `"complete": true`.
 
+When `--output` is used, each script creates a checkpoint file beside the report, named `<output>.state.json`. To continue an interrupted run, repeat the same command with `--resume`:
+
+```powershell
+python rt_queue_audit.py "General" --server https://rt.example.com --token "RT_TOKEN" --output rt-report.json --resume
+```
+
+For RT 4.4.3, use the same `--resume` option with `rt_queue_audit_rt44.py`. The state records the last fully written ticket ID, output byte offset, and summary counters. Resume truncates any incomplete JSON written after that checkpoint, preserves completed tickets, and continues with higher ticket IDs. Use the same queue, server, output path, and state file as the original run. A custom checkpoint path can be supplied with `--state-file` on both the original and resumed commands. Keep the state file until the report is complete; it can be deleted afterward.
+
 Each attachment record includes its ID, filename, content type, size in bytes, and MD5 checksum. The total attachment count and the sum of available attachment sizes are included at the report level.
 
 Each reply/comment record includes its transaction ID and type, creation time, UTF-8 content size, and MD5 checksum. The ticket-level `reply_comment_content_md5` is an aggregate MD5 of transaction `Content` values encoded as UTF-8 and concatenated in transaction ID order without separators. This aggregate is `null` if RT does not return content for any selected transaction.

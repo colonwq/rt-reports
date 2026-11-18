@@ -18,6 +18,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, HTTPCookieProcessor, Request, build_opener
+from rt_report_writer import JSONReportWriter, ReportWriterError
 
 
 API_SUFFIX = "/REST/1.0"
@@ -27,63 +28,6 @@ UPDATE_TYPES = {"correspond", "comment"}
 
 class RTError(Exception):
     """An RT API or response error suitable for displaying to the user."""
-
-
-class JSONReportWriter:
-    def __init__(self, stream: Any, server: str) -> None:
-        self.stream = stream
-        self.server = server
-        self.queue: dict[str, Any] | None = None
-        self.ticket_count = 0
-        self.attachment_count = 0
-        self.attachment_size_bytes = 0
-        self.closed = False
-        stream.write("{\n")
-        stream.write(f'  "generated_at": {json.dumps(datetime.now(timezone.utc).isoformat())},\n')
-        stream.write(f'  "server": {json.dumps(server)},\n')
-        stream.write('  "tickets": [')
-        stream.flush()
-
-    def set_queue(self, queue: dict[str, Any]) -> None:
-        self.queue = queue
-
-    def write_ticket(self, ticket: dict[str, Any]) -> None:
-        if self.closed:
-            raise RTError("Cannot write to a closed report")
-        rendered = json.dumps(ticket, indent=2, ensure_ascii=False)
-        if self.ticket_count:
-            self.stream.write(",")
-        self.stream.write("\n" + "\n".join("  " + line for line in rendered.splitlines()))
-        self.stream.flush()
-        self.ticket_count += 1
-        self.attachment_count += int(ticket.get("attachment_count", 0))
-        self.attachment_size_bytes += sum(
-            attachment["size_bytes"]
-            for attachment in ticket.get("attachments", [])
-            if attachment.get("size_bytes") is not None
-        )
-
-    def close(self, error: str | None = None) -> None:
-        if self.closed:
-            return
-        self.stream.write("\n  ],\n")
-        self.stream.write(f'  "queue": {json.dumps(self.queue, ensure_ascii=False)},\n')
-        self.stream.write(f'  "ticket_count": {self.ticket_count},\n')
-        self.stream.write(f'  "attachment_count": {self.attachment_count},\n')
-        self.stream.write(f'  "attachment_size_bytes": {self.attachment_size_bytes},\n')
-        self.stream.write(
-            '  "checksum_notes": {\n'
-            '    "attachment_md5": "MD5 of the bytes returned by the REST 1.0 attachment /content endpoint; original binary reconstruction can vary by RT encoding.",\n'
-            '    "update_md5": "MD5 of UTF-8 history Content; aggregate concatenates available contents in transaction ID order with no separators.",\n'
-            '    "unavailable_content": "A null checksum means content was unavailable or MD5 could not be calculated."\n'
-            '  },\n'
-        )
-        self.stream.write(f'  "complete": {json.dumps(error is None)}')
-        if error is not None:
-            self.stream.write(f',\n  "error": {json.dumps(error, ensure_ascii=False)}')
-        self.stream.write("\n}\n")
-        self.stream.flush()
-        self.closed = True
 
 
 class RTClient:
@@ -252,7 +196,7 @@ def list_ticket_ids(client: RTClient, queue_name: str) -> list[str]:
         "search/ticket",
         {"query": f"Queue = '{escaped_name}'", "format": "i"},
     )
-    return ticket_ids(response)
+    return sorted(ticket_ids(response), key=int)
 
 
 def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]:
@@ -351,6 +295,8 @@ def build_report(client: RTClient, queue_arg: str, writer: JSONReportWriter) -> 
     ids = list_ticket_ids(client, queue_name)
     print(f"Found {len(ids)} ticket(s)", file=sys.stderr)
     for index, ticket_id in enumerate(ids, start=1):
+        if writer.should_skip_ticket(ticket_id):
+            continue
         print(f"Processing ticket {index}/{len(ids)} (ID {ticket_id})...", file=sys.stderr)
         fields = parse_fields(client.get_text(f"ticket/{quote(ticket_id, safe='')}/show"))
         attachments = ticket_attachments(client, ticket_id)
@@ -381,6 +327,8 @@ def parse_args() -> argparse.Namespace:
         help="RT password (visible in process listings); omit to enter it securely at the prompt",
     )
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
+    parser.add_argument("--state-file", type=Path, help="checkpoint path (defaults to OUTPUT.state.json)")
+    parser.add_argument("--resume", action="store_true", help="resume from the output and state files")
     parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
     parser.add_argument("--debug", action="store_true", help="log REST request paths and response statuses to standard error")
     parser.add_argument(
@@ -394,12 +342,33 @@ def main() -> int:
     args = parse_args()
     password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
-        output_context = args.output.open("w", encoding="utf-8") if args.output else nullcontext(sys.stdout)
+        if args.resume and args.output is None:
+            raise RTError("--resume requires --output")
+        if args.state_file is not None and args.output is None:
+            raise RTError("--state-file requires --output")
+        state_path = args.state_file or (Path(str(args.output) + ".state.json") if args.output else None)
+        output_context = (
+            args.output.open("r+b" if args.resume else "w+b")
+            if args.output
+            else nullcontext(sys.stdout.buffer)
+        )
         with output_context as output_stream:
             root = args.server if "://" in args.server else "https://" + args.server
             root = root.rstrip("/")
             api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
-            writer = JSONReportWriter(output_stream, api_base)
+            notes = {
+                "attachment_md5": "MD5 of the bytes returned by the REST 1.0 attachment /content endpoint; original binary reconstruction can vary by RT encoding.",
+                "update_md5": "MD5 of UTF-8 history Content; aggregate concatenates available contents in transaction ID order with no separators.",
+                "unavailable_content": "A null checksum means content was unavailable or MD5 could not be calculated.",
+            }
+            writer = JSONReportWriter(
+                output_stream,
+                api_base,
+                notes,
+                state_path,
+                args.output,
+                args.resume,
+            )
             try:
                 print("Connecting and authenticating with RT REST 1.0...", file=sys.stderr)
                 client = RTClient(args.server, args.username, password, args.timeout, args.insecure, args.debug)
@@ -415,7 +384,7 @@ def main() -> int:
                 print(f"Report written to {args.output}", file=sys.stderr)
             else:
                 print("Report written to standard output", file=sys.stderr)
-    except (RTError, OSError, ValueError) as exc:
+    except (RTError, ReportWriterError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     return 0
