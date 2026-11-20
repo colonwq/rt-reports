@@ -105,12 +105,22 @@ def attachment_fallback_key(attachment: dict[str, Any]) -> tuple[str, str] | Non
     return filename, str(size) if size is not None else ""
 
 
+def attachment_content_unavailable(attachment: dict[str, Any]) -> bool:
+    return normalized(attachment.get("error")) == "attachment content was not available"
+
+
 def compare_attachments(
     left_ticket: dict[str, Any],
     right_ticket: dict[str, Any],
 ) -> dict[str, Any] | None:
-    left_items = [item for item in left_ticket.get("attachments", []) if isinstance(item, dict)]
-    right_items = [item for item in right_ticket.get("attachments", []) if isinstance(item, dict)]
+    left_items = [
+        item for item in left_ticket.get("attachments", [])
+        if isinstance(item, dict) and not attachment_content_unavailable(item)
+    ]
+    right_items = [
+        item for item in right_ticket.get("attachments", [])
+        if isinstance(item, dict) and not attachment_content_unavailable(item)
+    ]
     remaining_right = set(range(len(right_items)))
     remaining_left: list[dict[str, Any]] = []
     changed_content: list[dict[str, Any]] = []
