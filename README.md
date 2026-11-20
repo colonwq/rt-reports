@@ -31,6 +31,22 @@ This disables TLS certificate validation and makes the connection vulnerable to 
 
 REST 1.0 reports attachment data through a legacy content endpoint. The script hashes the returned content bytes; depending on RT's encoding of a particular attachment, those bytes may not reproduce the original uploaded binary exactly.
 
+### Automatic Retry Wrapper
+
+On Linux, macOS, or another Bash environment, use the wrapper to restart the audit after a nonzero exit. It retries with `--resume` and prints the restart count and total elapsed time after success:
+
+```bash
+bash run_rt_queue_audit_rt44.sh "General" --server https://rt.example.com --username alice --output rt44-report.json
+```
+
+The RT 5.0.10 wrapper uses the same pattern:
+
+```bash
+bash run_rt_queue_audit.sh "General" --server https://rt.example.com --token "$RT_TOKEN" --output rt5-report.json
+```
+
+Both wrappers require `--output`; the audit state file is needed to resume. They retry indefinitely while a checkpoint exists, waiting a randomized 0–36 seconds between attempts by default. Set `RT_RETRY_DELAY_SECONDS` to use a fixed delay instead. Press Ctrl+C to stop retrying. If the audit exits before creating a checkpoint (such as invalid arguments or an unwritable output path), the wrapper stops and returns the failure status instead of repeating an unrecoverable run. Set `PYTHON` to select a Python executable other than `python3`.
+
 ## Compare Reports
 
 After generating reports from both systems, compare them with `compare_rt_reports.py`:
@@ -69,6 +85,8 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
 | `--timeout` | HTTP timeout in seconds; defaults to `30`. |
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
+
+Audit scripts return `0` on success and a nonzero status on failure. The Bash wrappers use this status to decide when to resume.
 
 ## Report Contents
 

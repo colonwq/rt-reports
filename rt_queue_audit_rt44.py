@@ -18,7 +18,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, HTTPCookieProcessor, Request, build_opener
-from rt_report_writer import JSONReportWriter, ReportWriterError
+from rt_report_writer import JSONReportWriter
 
 
 API_SUFFIX = "/REST/1.0"
@@ -384,9 +384,9 @@ def main() -> int:
                 print(f"Report written to {args.output}", file=sys.stderr)
             else:
                 print("Report written to standard output", file=sys.stderr)
-    except (RTError, ReportWriterError, OSError, ValueError) as exc:
+    except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
-        return 2
+        return 1
     return 0
 
 
