@@ -24,6 +24,7 @@ from rt_report_writer import JSONReportWriter
 API_SUFFIX = "/REST/1.0"
 FIELD_LINE = re.compile(r"^([^:\r\n]+):(?: ?(.*))?$")
 UPDATE_TYPES = {"correspond", "comment"}
+RT_SYSTEM_CREATORS = {"the rt system itself", "rt_system", "rtsystem"}
 
 
 class RTError(Exception):
@@ -145,6 +146,19 @@ def md5_hex(data: bytes) -> str | None:
         return None
 
 
+def is_rt_system_status(transaction_type: Any, creator: Any) -> bool:
+    if str(transaction_type or "").strip().casefold() != "status":
+        return False
+    if isinstance(creator, dict):
+        creator_values = (creator.get("id"), creator.get("name"), creator.get("Name"))
+    else:
+        creator_values = (creator,)
+    return any(
+        str(value or "").strip().casefold() in RT_SYSTEM_CREATORS
+        for value in creator_values
+    )
+
+
 def ticket_ids(search_response: str) -> list[str]:
     found = re.findall(r"\bticket/(\d+)\b", search_response)
     return list(dict.fromkeys(found))
@@ -253,6 +267,8 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
 
     for fields in history_records(response):
         update_type = fields.get("Type", "")
+        if is_rt_system_status(update_type, fields.get("Creator")):
+            continue
         if update_type.lower() not in UPDATE_TYPES:
             continue
 
@@ -329,7 +345,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--state-file", type=Path, help="checkpoint path (defaults to OUTPUT.state.json)")
     parser.add_argument("--resume", action="store_true", help="resume from the output and state files")
-    parser.add_argument("--timeout", type=int, default=30, help="HTTP timeout in seconds (default: 30)")
+    parser.add_argument("--timeout", type=int, default=60, help="HTTP timeout in seconds (default: 60)")
     parser.add_argument("--debug", action="store_true", help="log REST request paths and response statuses to standard error")
     parser.add_argument(
         "-k", "--insecure", action="store_true",

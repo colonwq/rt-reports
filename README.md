@@ -83,10 +83,10 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 | `--server` | Required RT hostname or base URL. A missing scheme defaults to HTTPS. |
 | `--token` | Required RT authentication token. |
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
-| `--timeout` | HTTP timeout in seconds; defaults to `30`. |
+| `--timeout` | HTTP timeout in seconds; defaults to `60` for both audit scripts. |
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
 
-Audit scripts return `0` on success and a nonzero status on failure. The Bash wrappers use this status to decide when to resume.
+Audit scripts return `0` on success and `1` on a handled error. The Bash wrappers use this status to decide when to resume.
 
 ## Report Contents
 
@@ -110,4 +110,4 @@ A `null` individual checksum indicates the content could not be retrieved or MD5
 
 ## Errors and Permissions
 
-The RT account must have access to the data being audited. If RT does not expose a ticket, transaction, or attachment to that account, the report may omit it or report unavailable content. HTTP/API errors are printed to standard error and the script exits with status `2`.
+The RT account must have access to the data being audited. If RT does not expose a ticket, transaction, or attachment to that account, the report may omit it or report unavailable content. HTTP/API errors are printed to standard error and the script exits with status `1`.
