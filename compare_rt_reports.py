@@ -418,8 +418,15 @@ def compare_messages(
     }
 
 
-def compare_reports(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
-    pairs, missing_left, missing_right = pair_tickets(left["tickets"], right["tickets"])
+def compare_reports(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    forced_pairs: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    if forced_pairs is None:
+        pairs, missing_left, missing_right = pair_tickets(left["tickets"], right["tickets"])
+    else:
+        pairs, missing_left, missing_right = forced_pairs, [], []
     differing_attachments: list[dict[str, Any]] = []
     attachment_comparison_details: list[dict[str, Any]] = []
     differing_attachment_content: list[dict[str, Any]] = []

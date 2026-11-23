@@ -9,12 +9,38 @@
 - REST2 access for RT 5.0.10, or REST 1.0 access for RT 4.4.3
 - HTTPS is recommended to protect credentials in transit
 
+## Credentials File
+
+The repository includes an `auth.json` template with placeholder values. Replace them with your RT credentials; the file is ignored by Git. Its structure is:
+
+```json
+{
+	"rt4": {
+		"url": "https://rt44.example.com",
+		"name": "rt4-user-name",
+		"password": "replace-with-rt4-password"
+	},
+	"rt5": {
+		"url": "https://rt5.example.com",
+		"token": "replace-with-rt5-token"
+	}
+}
+```
+
+Use `--auth-file auth.json` with either queue audit script. The RT 4.4.3 `name` is the login username; each `url` is the server base URL, optionally including an installation path.
+
 ## RT 4.4.3
 
 RT 4.4.3 uses the legacy REST 1.0 API. Run `rt_queue_audit_rt44.py` for that server; it logs in to REST 1.0 and keeps the session cookie for subsequent requests.
 
 ```powershell
 python rt_queue_audit_rt44.py "General" --server https://rt.example.com --username alice --output rt44-report.json
+```
+
+To read connection details and credentials from `auth.json` instead:
+
+```powershell
+python rt_queue_audit_rt44.py "General" --auth-file auth.json --output rt44-report.json
 ```
 
 The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings.
@@ -47,30 +73,18 @@ bash run_rt_queue_audit.sh "General" --server https://rt.example.com --token "$R
 
 Both wrappers require `--output`; the audit state file is needed to resume. They retry indefinitely while a checkpoint exists, waiting a randomized 0–36 seconds between attempts by default. Set `RT_RETRY_DELAY_SECONDS` to use a fixed delay instead. Press Ctrl+C to stop retrying. If the audit exits before creating a checkpoint (such as invalid arguments or an unwritable output path), the wrapper stops and returns the failure status instead of repeating an unrecoverable run. Set `PYTHON` to select a Python executable other than `python3`.
 
-## Compare Reports
-
-After generating reports from both systems, compare them with `compare_rt_reports.py`:
-
-```powershell
-python compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
-```
-
-In Bash, run the same comparison with:
-
-```bash
-python3 compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
-```
-
-Alongside `comparison.json`, this writes four focused JSON reports: `comparison_missing_tickets.json`, `comparison_ticket_metadata_differences.json`, `comparison_attachment_differences.json`, and `comparison_attachment_content_differences.json`. They cover tickets present in only one input, ticket ID/title/creation-date/attachment-count changes, attachment ID/type/name changes or missing attachments, and attachment size/MD5 changes, respectively. The aggregate comparison JSON also includes these categories and the existing reply/comment message comparison.
-
-Tickets are matched by ID first, then by a unique normalized subject and creation-time pair if IDs differ. Creation timestamps with an explicit timezone (such as RT 5's UTC timestamps) are compared as instants; timezone-naive RT 4.4 timestamps are interpreted as local time in `America/Chicago`. Attachments are paired by ID, then filename and type/name, so changed size or checksum can be reported separately from attachment metadata changes. `from_right` means present only in the first (left) input; `from_left` means present only in the second (right) input. RT 4.4 attachment encoding can produce checksum differences even when source files are the same, so review those differences with the RT 4.4 encoding caveat above. The audit JSON does not associate attachments or ticket metadata with a transaction, so those report entries have a null transaction ID and URL rather than an inferred link.
-
 ## RT 5.0.10 Usage
 
 The queue is the positional argument and may be its name or numeric ID. If `--server` is given as a bare hostname, the script assumes HTTPS and appends `/REST/2.0`. A server URL may include an RT installation path, for example `https://rt.example.com/rt`.
 
 ```powershell
 python rt_queue_audit.py "General" --server https://rt.example.com --token "RT_TOKEN"
+```
+
+With credentials from `auth.json`:
+
+```powershell
+python rt_queue_audit.py "General" --auth-file auth.json
 ```
 
 To save the JSON report to a file, use `--output`:
@@ -95,6 +109,35 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
 
 Audit scripts return `0` on success and `1` on a handled error. The Bash wrappers use this status to decide when to resume.
+
+## Compare Reports
+
+After generating reports from both systems, compare them with `compare_rt_reports.py`:
+
+```powershell
+python compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
+```
+
+In Bash, run the same comparison with:
+
+```bash
+python3 compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
+```
+
+### Verify One Ticket Directly
+
+`audit_rt_ticket.py` fetches one ticket from each RT system, then applies the same ticket, attachment, and reply/comment comparison rules as the report comparer. If IDs differ between systems, pass both IDs; otherwise `--ticket-id` can be used for both:
+
+```bash
+python3 audit_rt_ticket.py --auth-file auth.json --ticket-id 12345 --output ticket-comparison.json
+python3 audit_rt_ticket.py --auth-file auth.json --rt4-ticket-id 12345 --rt5-ticket-id 67890 --output ticket-comparison.json
+```
+
+The verifier prints the comparison JSON to standard output when `--output` is omitted. A ticket that returns HTTP 404 on one side appears as missing in the comparison.
+
+Alongside `comparison.json`, this writes four focused JSON reports: `comparison_missing_tickets.json`, `comparison_ticket_metadata_differences.json`, `comparison_attachment_differences.json`, and `comparison_attachment_content_differences.json`. They cover tickets present in only one input, ticket ID/title/creation-date/attachment-count changes, attachment ID/type/name changes or missing attachments, and attachment size/MD5 changes, respectively. The aggregate comparison JSON also includes these categories and the existing reply/comment message comparison.
+
+Tickets are matched by ID first, then by a unique normalized subject and creation-time pair if IDs differ. Creation timestamps with an explicit timezone (such as RT 5's UTC timestamps) are compared as instants; timezone-naive RT 4.4 timestamps are interpreted as local time in `America/Chicago`. Attachments are paired by ID, then filename and type/name, so changed size or checksum can be reported separately from attachment metadata changes. `from_right` means present only in the first (left) input; `from_left` means present only in the second (right) input. RT 4.4 attachment encoding can produce checksum differences even when source files are the same, so review those differences with the RT 4.4 encoding caveat above. The audit JSON does not associate attachments or ticket metadata with a transaction, so those report entries have a null transaction ID and URL rather than an inferred link.
 
 ## Report Contents
 

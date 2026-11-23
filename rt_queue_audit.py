@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, Request, build_opener
 from rt_report_writer import JSONReportWriter
+from rt_auth import load_auth
 
 
 API_SUFFIX = "/REST/2.0"
@@ -297,11 +298,12 @@ def parse_args() -> argparse.Namespace:
         description="Report attachments and reply/comment checksums for every ticket in an RT queue."
     )
     parser.add_argument("queue", help="RT queue name or numeric ID")
-    parser.add_argument("--server", required=True, help="RT hostname or base URL, optionally including an installation path")
+    parser.add_argument("--server", help="RT hostname or base URL, optionally including an installation path")
     parser.add_argument(
-        "--token", required=True,
+        "--token",
         help="RT authentication token (visible in process listings and shell history)",
     )
+    parser.add_argument("--auth-file", type=Path, help="JSON credentials file containing an rt5 object")
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--state-file", type=Path, help="checkpoint path (defaults to OUTPUT.state.json)")
     parser.add_argument("--resume", action="store_true", help="resume from the output and state files")
@@ -316,6 +318,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        auth = load_auth(args.auth_file, "rt5") if args.auth_file else {}
+        server = args.server or auth.get("url")
+        token = args.token or auth.get("token")
+        if not server or not token:
+            raise RTError("provide --auth-file with rt5 credentials, or both --server and --token")
         if args.resume and args.output is None:
             raise RTError("--resume requires --output")
         if args.state_file is not None and args.output is None:
@@ -327,7 +334,7 @@ def main() -> int:
             else nullcontext(sys.stdout.buffer)
         )
         with output_context as output_stream:
-            root = args.server if "://" in args.server else "https://" + args.server
+            root = server if "://" in server else "https://" + server
             root = root.rstrip("/")
             api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
             notes = {
@@ -344,7 +351,7 @@ def main() -> int:
                 args.resume,
             )
             try:
-                client = RTClient(args.server, args.token, args.timeout, args.insecure)
+                client = RTClient(server, token, args.timeout, args.insecure)
                 if urlsplit(client.api_base).scheme != "https":
                     print("Warning: the RT token is being sent without HTTPS.", file=sys.stderr)
                 build_report(client, args.queue, writer)

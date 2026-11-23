@@ -19,6 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, HTTPCookieProcessor, Request, build_opener
 from rt_report_writer import JSONReportWriter
+from rt_auth import load_auth
 
 
 API_SUFFIX = "/REST/1.0"
@@ -336,12 +337,13 @@ def parse_args() -> argparse.Namespace:
         description="Report attachments and reply/comment checksums from an RT 4.4.3 queue."
     )
     parser.add_argument("queue", help="RT queue name or numeric ID")
-    parser.add_argument("--server", required=True, help="RT hostname or base URL, optionally including an installation path")
-    parser.add_argument("--username", required=True, help="RT username")
+    parser.add_argument("--server", help="RT hostname or base URL, optionally including an installation path")
+    parser.add_argument("--username", help="RT username")
     parser.add_argument(
         "--password",
         help="RT password (visible in process listings); omit to enter it securely at the prompt",
     )
+    parser.add_argument("--auth-file", type=Path, help="JSON credentials file containing an rt4 object")
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--state-file", type=Path, help="checkpoint path (defaults to OUTPUT.state.json)")
     parser.add_argument("--resume", action="store_true", help="resume from the output and state files")
@@ -356,8 +358,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    password = args.password if args.password is not None else getpass.getpass("RT password: ")
     try:
+        auth = load_auth(args.auth_file, "rt4") if args.auth_file else {}
+        server = args.server or auth.get("url")
+        username = args.username or auth.get("name")
+        password = args.password if args.password is not None else auth.get("password")
+        if not server or not username:
+            raise RTError("provide --auth-file with rt4 credentials, or both --server and --username")
+        if password is None:
+            password = getpass.getpass("RT password: ")
         if args.resume and args.output is None:
             raise RTError("--resume requires --output")
         if args.state_file is not None and args.output is None:
@@ -369,7 +378,7 @@ def main() -> int:
             else nullcontext(sys.stdout.buffer)
         )
         with output_context as output_stream:
-            root = args.server if "://" in args.server else "https://" + args.server
+            root = server if "://" in server else "https://" + server
             root = root.rstrip("/")
             api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
             notes = {
@@ -387,7 +396,7 @@ def main() -> int:
             )
             try:
                 print("Connecting and authenticating with RT REST 1.0...", file=sys.stderr)
-                client = RTClient(args.server, args.username, password, args.timeout, args.insecure, args.debug)
+                client = RTClient(server, username, password, args.timeout, args.insecure, args.debug)
                 if urlsplit(client.api_base).scheme != "https":
                     print("Warning: RT credentials are being sent without HTTPS.", file=sys.stderr)
                 build_report(client, args.queue, writer)

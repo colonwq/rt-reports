@@ -1,0 +1,11 @@
+{
+  "rt4": {
+    "url": "https://rt44.example.com",
+    "name": "rt4-user-name",
+    "password": "replace-with-rt4-password"
+  },
+  "rt5": {
+    "url": "https://rt5.example.com",
+    "token": "replace-with-rt5-token"
+  }
+}
