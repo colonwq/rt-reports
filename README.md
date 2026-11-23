@@ -143,7 +143,9 @@ Tickets are matched by ID first, then by a unique normalized subject and creatio
 
 ## Report Contents
 
-The JSON report includes queue details and a ticket entry for each matching ticket. Each ticket contains its ID, subject, creation time, attachment count and attachment records, plus reply/comment transaction records.
+The JSON report includes queue details and a ticket entry for each matching ticket. Each ticket contains its ID, subject, creation time, last-updated time, attachment count and attachment records, plus reply/comment transaction records. Attachment records include the attachment creation/add time when RT provides it.
+
+When comparing systems, changes are considered only through the other system's ticket `last_updated` time. Reply/comment updates and attachments added after that time are excluded for missing-item checks, in both comparison directions. Attachment counts are computed from the attachments within that comparison window.
 
 Both audit scripts stream each completed ticket directly to the output rather than retaining the full report in memory. Summary counts and sizes are written when processing finishes. If an error occurs after output has started, the scripts close the JSON structure and mark it with `"complete": false` plus an `error` message; tickets completed before the failure remain available. A normally finished report has `"complete": true`.
 

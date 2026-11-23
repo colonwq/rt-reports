@@ -68,6 +68,42 @@ def creation_timestamp_key(value: Any) -> str:
     return parsed.isoformat() if parsed else normalized(value)
 
 
+def change_is_after_cutoff(change: dict[str, Any], cutoff: Any) -> bool:
+    change_time = parse_creation_timestamp(change.get("created"))
+    cutoff_time = parse_creation_timestamp(cutoff)
+    return change_time is not None and cutoff_time is not None and change_time > cutoff_time
+
+
+def filter_ticket_changes(
+    left_ticket: dict[str, Any],
+    right_ticket: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    left_cutoff = right_ticket.get("last_updated")
+    right_cutoff = left_ticket.get("last_updated")
+    left_filtered = dict(left_ticket)
+    right_filtered = dict(right_ticket)
+
+    left_attachments = ticket_attachment_items(left_ticket)
+    right_attachments = ticket_attachment_items(right_ticket)
+    left_filtered["attachments"] = [
+        item for item in left_attachments if not change_is_after_cutoff(item, left_cutoff)
+    ]
+    right_filtered["attachments"] = [
+        item for item in right_attachments if not change_is_after_cutoff(item, right_cutoff)
+    ]
+    left_filtered["attachment_count"] = len(left_filtered["attachments"])
+    right_filtered["attachment_count"] = len(right_filtered["attachments"])
+    left_filtered["reply_comment_updates"] = [
+        item for item in left_ticket.get("reply_comment_updates", [])
+        if isinstance(item, dict) and not change_is_after_cutoff(item, left_cutoff)
+    ]
+    right_filtered["reply_comment_updates"] = [
+        item for item in right_ticket.get("reply_comment_updates", [])
+        if isinstance(item, dict) and not change_is_after_cutoff(item, right_cutoff)
+    ]
+    return left_filtered, right_filtered
+
+
 def ticket_fallback_key(ticket: dict[str, Any]) -> tuple[str, str] | None:
     subject = normalized(ticket.get("subject"))
     created = creation_timestamp_key(ticket.get("created"))
@@ -154,6 +190,7 @@ def attachment_report_fields(attachment: dict[str, Any]) -> dict[str, Any]:
         "id": attachment.get("id"),
         "type": attachment.get("content_type", attachment.get("type")),
         "name": attachment.get("filename", attachment.get("FileName")),
+        "created": attachment.get("created"),
         "size_bytes": attachment.get("size_bytes"),
         "md5": attachment.get("md5"),
     }
@@ -366,7 +403,7 @@ def compare_attachments(
 
 
 def message_base_key(message: dict[str, Any]) -> tuple[str, str]:
-    return normalized(message.get("type")), normalized(message.get("created"))
+    return normalized(message.get("type")), creation_timestamp_key(message.get("created"))
 
 
 def compare_messages(
@@ -434,6 +471,7 @@ def compare_reports(
     differing_messages: list[dict[str, Any]] = []
 
     for left_ticket, right_ticket in pairs:
+        left_ticket, right_ticket = filter_ticket_changes(left_ticket, right_ticket)
         metadata_diff = compare_ticket_metadata(left_ticket, right_ticket)
         if metadata_diff:
             differing_ticket_metadata.append(metadata_diff)
@@ -476,6 +514,7 @@ def compare_reports(
         "comparison_notes": {
             "ticket_matching": "Ticket IDs are matched first. If IDs differ, a unique normalized subject plus creation timestamp is used as fallback.",
             "creation_time_matching": "Creation timestamps with an explicit timezone are compared as instants; timezone-naive timestamps are interpreted as America/Chicago local time before comparison.",
+            "change_cutoff": "Per-ticket attachments and reply/comment updates later than the other report's last_updated time are excluded from comparison.",
             "attachment_matching": "Attachments are matched by MD5 first, then normalized filename and size to identify changed content, then by ID when hashes and metadata are unavailable.",
             "message_matching": "Reply/comment messages are paired by type and creation timestamp; matching content MD5s are compared. RT 4.4 attachment byte encoding may cause checksum differences.",
             "direction": "from_right means present only in the left input report; from_left means present only in the right input report.",

@@ -34,6 +34,7 @@ def fetch_rt4_ticket(
         "id": ticket_id,
         "subject": fields.get("Subject"),
         "created": fields.get("Created"),
+        "last_updated": fields.get("LastUpdated"),
         "attachment_count": len(attachments),
         "attachments": attachments,
         "reply_comment_count": len(updates),
@@ -61,6 +62,7 @@ def fetch_rt5_ticket(
         "id": str(rt5.value_id(details) or ticket_id),
         "subject": details.get("Subject"),
         "created": details.get("Created"),
+        "last_updated": details.get("LastUpdated"),
         "attachment_count": len(attachments),
         "attachments": attachments,
         "reply_comment_count": len(updates),
@@ -87,6 +89,7 @@ def write_missing_attachment_files(
     right_contents: dict[str, bytes],
     base_dir: Path,
 ) -> tuple[list[Path], list[dict[str, Any]]]:
+    left_ticket, right_ticket = compare_rt_reports.filter_ticket_changes(left_ticket, right_ticket)
     left_items = compare_rt_reports.ticket_attachment_items(left_ticket)
     right_items = compare_rt_reports.ticket_attachment_items(right_ticket)
     _, missing_from_right, missing_from_left = compare_rt_reports.pair_attachments(left_items, right_items)
@@ -166,6 +169,13 @@ def main() -> int:
         right_report = {"server": client5.api_base, "tickets": [ticket5] if ticket5 else []}
         forced_pairs = [(ticket4, ticket5)] if ticket4 is not None and ticket5 is not None else None
         result = compare_rt_reports.compare_reports(left_report, right_report, forced_pairs)
+        if ticket4 is not None and ticket5 is not None:
+            result["comparison_window"] = {
+                "rt4_last_updated": ticket4.get("last_updated"),
+                "rt5_last_updated": ticket5.get("last_updated"),
+                "rt4_changes_after": ticket5.get("last_updated"),
+                "rt5_changes_after": ticket4.get("last_updated"),
+            }
         if ticket4 is not None and ticket5 is not None:
             base_dir = args.output.parent if args.output else Path.cwd()
             written_files, unavailable_files = write_missing_attachment_files(
