@@ -214,7 +214,11 @@ def list_ticket_ids(client: RTClient, queue_name: str) -> list[str]:
     return sorted(ticket_ids(response), key=int)
 
 
-def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]:
+def ticket_attachments(
+    client: RTClient,
+    ticket_id: str,
+    contents: dict[str, bytes] | None = None,
+) -> list[dict[str, Any]]:
     ticket_path = "ticket/" + quote(ticket_id, safe="")
     listing = client.get_text(ticket_path + "/attachments")
     results: list[dict[str, Any]] = []
@@ -239,6 +243,8 @@ def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]
             raw_content = extract_attachment_bytes(response)
             size_bytes = len(raw_content)
             checksum = md5_hex(raw_content)
+            if contents is not None:
+                contents[str(attachment_id)] = raw_content
         except RTError as exc:
             content_error = str(exc)
 

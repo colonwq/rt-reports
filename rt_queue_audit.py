@@ -209,7 +209,11 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
     return updates, aggregate_md5
 
 
-def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]:
+def ticket_attachments(
+    client: RTClient,
+    ticket_id: str,
+    contents: dict[str, bytes] | None = None,
+) -> list[dict[str, Any]]:
     entries = client.collection(f"ticket/{quote(ticket_id, safe='')}/attachments")
     attachments: list[dict[str, Any]] = []
     for entry in entries:
@@ -229,6 +233,8 @@ def ticket_attachments(client: RTClient, ticket_id: str) -> list[dict[str, Any]]
                 raw_content = base64.b64decode("".join(content.split()), validate=True)
                 size_bytes = len(raw_content)
                 checksum = md5_hex(raw_content)
+                if contents is not None and attachment_id is not None:
+                    contents[str(attachment_id)] = raw_content
             except (ValueError, TypeError):
                 error = "Attachment content was not valid base64"
         else:
