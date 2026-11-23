@@ -11,7 +11,7 @@
 
 ## Credentials File
 
-The repository includes an `auth.json` template with placeholder values. Replace them with your RT credentials; the file is ignored by Git. Its structure is:
+The repository includes an `example-auth.json` template with placeholder values. Copy it to a local credentials file and replace the placeholders with your RT credentials. Its structure is:
 
 ```json
 {
@@ -27,7 +27,7 @@ The repository includes an `auth.json` template with placeholder values. Replace
 }
 ```
 
-Use `--auth-file auth.json` with either queue audit script. The RT 4.4.3 `name` is the login username; each `url` is the server base URL, optionally including an installation path.
+Use `--auth-file example-auth.json` (or your local credentials file) with either queue audit script. The RT 4.4.3 `name` is the login username; each `url` is the server base URL, optionally including an installation path. Keep real credentials out of version control.
 
 ## RT 4.4.3
 
@@ -37,10 +37,10 @@ RT 4.4.3 uses the legacy REST 1.0 API. Run `rt_queue_audit_rt44.py` for that ser
 python rt_queue_audit_rt44.py "General" --server https://rt.example.com --username alice --output rt44-report.json
 ```
 
-To read connection details and credentials from `auth.json` instead:
+To read connection details and credentials from `example-auth.json` instead:
 
 ```powershell
-python rt_queue_audit_rt44.py "General" --auth-file auth.json --output rt44-report.json
+python rt_queue_audit_rt44.py "General" --auth-file example-auth.json --output rt44-report.json
 ```
 
 The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings.
@@ -81,10 +81,10 @@ The queue is the positional argument and may be its name or numeric ID. If `--se
 python rt_queue_audit.py "General" --server https://rt.example.com --token "RT_TOKEN"
 ```
 
-With credentials from `auth.json`:
+With credentials from `example-auth.json`:
 
 ```powershell
-python rt_queue_audit.py "General" --auth-file auth.json
+python rt_queue_audit.py "General" --auth-file example-auth.json
 ```
 
 To save the JSON report to a file, use `--output`:
@@ -129,8 +129,8 @@ python3 compare_rt_reports.py rt44-report.json rt5-report.json --output comparis
 `audit_rt_ticket.py` fetches one ticket from each RT system, then applies the same ticket, attachment, and reply/comment comparison rules as the report comparer. If IDs differ between systems, pass both IDs; otherwise `--ticket-id` can be used for both:
 
 ```bash
-python3 audit_rt_ticket.py --auth-file auth.json --ticket-id 12345 --output ticket-comparison.json
-python3 audit_rt_ticket.py --auth-file auth.json --rt4-ticket-id 12345 --rt5-ticket-id 67890 --output ticket-comparison.json
+python3 audit_rt_ticket.py --auth-file example-auth.json --ticket-id 12345 --output ticket-comparison.json
+python3 audit_rt_ticket.py --auth-file example-auth.json --rt4-ticket-id 12345 --rt5-ticket-id 67890 --output ticket-comparison.json
 ```
 
 The verifier prints the comparison JSON to standard output when `--output` is omitted. A ticket that returns HTTP 404 on one side appears as missing in the comparison.
