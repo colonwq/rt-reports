@@ -7,8 +7,10 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def load_report(path: Path) -> dict[str, Any]:
@@ -28,9 +30,47 @@ def normalized(value: Any) -> str:
     return str(value or "").strip().casefold()
 
 
+def second_sunday(year: int, month: int) -> int:
+    first_day = datetime(year, month, 1).weekday()
+    first_sunday = 1 + (6 - first_day) % 7
+    return first_sunday + 7
+
+
+def first_sunday(year: int, month: int) -> int:
+    first_day = datetime(year, month, 1).weekday()
+    return 1 + (6 - first_day) % 7
+
+
+def parse_creation_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        try:
+            parsed = parsed.replace(tzinfo=ZoneInfo("America/Chicago"))
+        except ZoneInfoNotFoundError:
+            # Windows may not have an IANA timezone database installed.
+            year = parsed.year
+            dst_start = datetime(year, 3, second_sunday(year, 3), 2)
+            dst_end = datetime(year, 11, first_sunday(year, 11), 2)
+            offset_hours = -5 if dst_start <= parsed < dst_end else -6
+            parsed = parsed.replace(tzinfo=timezone(timedelta(hours=offset_hours)))
+    return parsed.astimezone(timezone.utc)
+
+
+def creation_timestamp_key(value: Any) -> str:
+    parsed = parse_creation_timestamp(value)
+    return parsed.isoformat() if parsed else normalized(value)
+
+
 def ticket_fallback_key(ticket: dict[str, Any]) -> tuple[str, str] | None:
     subject = normalized(ticket.get("subject"))
-    created = normalized(ticket.get("created"))
+    created = creation_timestamp_key(ticket.get("created"))
     if not subject or not created:
         return None
     return subject, created
@@ -170,10 +210,18 @@ def compare_ticket_metadata(
     left_ticket: dict[str, Any],
     right_ticket: dict[str, Any],
 ) -> dict[str, Any] | None:
+    left_created = left_ticket.get("created")
+    right_created = right_ticket.get("created")
+    left_created_utc = parse_creation_timestamp(left_created)
+    right_created_utc = parse_creation_timestamp(right_created)
+    created_matches = (
+        left_created_utc == right_created_utc
+        if left_created_utc is not None and right_created_utc is not None
+        else left_created == right_created
+    )
     values = {
         "id": (str(left_ticket["id"]), str(right_ticket["id"])),
         "title": (left_ticket.get("subject"), right_ticket.get("subject")),
-        "creation_date": (left_ticket.get("created"), right_ticket.get("created")),
         "attachment_count": (ticket_attachment_count(left_ticket), ticket_attachment_count(right_ticket)),
     }
     differences = {
@@ -181,6 +229,8 @@ def compare_ticket_metadata(
         for field, (left_value, right_value) in values.items()
         if left_value != right_value
     }
+    if not created_matches:
+        differences["creation_date"] = {"left": left_created, "right": right_created}
     if not differences:
         return None
     return {
@@ -418,6 +468,7 @@ def compare_reports(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
         "message_differences": differing_messages,
         "comparison_notes": {
             "ticket_matching": "Ticket IDs are matched first. If IDs differ, a unique normalized subject plus creation timestamp is used as fallback.",
+            "creation_time_matching": "Creation timestamps with an explicit timezone are compared as instants; timezone-naive timestamps are interpreted as America/Chicago local time before comparison.",
             "attachment_matching": "Attachments are matched by MD5 first, then normalized filename and size to identify changed content, then by ID when hashes and metadata are unavailable.",
             "message_matching": "Reply/comment messages are paired by type and creation timestamp; matching content MD5s are compared. RT 4.4 attachment byte encoding may cause checksum differences.",
             "direction": "from_right means present only in the left input report; from_left means present only in the right input report.",
