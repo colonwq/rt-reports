@@ -55,7 +55,15 @@ After generating reports from both systems, compare them with `compare_rt_report
 python compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
 ```
 
-The comparison JSON summarizes matched and missing tickets, attachments missing from either report, attachments with changed checksums, and reply/comment messages with differing content hashes or present on only one side. Tickets are matched by ID first, then by a unique subject and creation-time pair if IDs differ. Attachments are matched by MD5, then filename and size; messages are paired by type and creation time. `from_right` means present only in the first (left) input; `from_left` means present only in the second (right) input. RT 4.4 attachment encoding can produce checksum differences even when source files are the same, so review those differences with the RT 4.4 encoding caveat above.
+In Bash, run the same comparison with:
+
+```bash
+python3 compare_rt_reports.py rt44-report.json rt5-report.json --output comparison.json
+```
+
+Alongside `comparison.json`, this writes four focused JSON reports: `comparison_missing_tickets.json`, `comparison_ticket_metadata_differences.json`, `comparison_attachment_differences.json`, and `comparison_attachment_content_differences.json`. They cover tickets present in only one input, ticket ID/title/creation-date/attachment-count changes, attachment ID/type/name changes or missing attachments, and attachment size/MD5 changes, respectively. The aggregate comparison JSON also includes these categories and the existing reply/comment message comparison.
+
+Tickets are matched by ID first, then by a unique subject and creation-time pair if IDs differ. Attachments are paired by ID, then filename and type/name, so changed size or checksum can be reported separately from attachment metadata changes. `from_right` means present only in the first (left) input; `from_left` means present only in the second (right) input. RT 4.4 attachment encoding can produce checksum differences even when source files are the same, so review those differences with the RT 4.4 encoding caveat above. The audit JSON does not associate attachments or ticket metadata with a transaction, so those report entries have a null transaction ID and URL rather than an inferred link.
 
 ## RT 5.0.10 Usage
 
