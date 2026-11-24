@@ -2,10 +2,10 @@
   "rt4": {
     "url": "https://rt44.example.com",
     "name": "rt4-user-name",
-    "password": "replace-with-rt4-password"
+    "password": "cmVwbGFjZS13aXRoLXJ0NC1wYXNzd29yZA=="
   },
   "rt5": {
     "url": "https://rt5.example.com",
-    "token": "replace-with-rt5-token"
+    "token": "cmVwbGFjZS13aXRoLXJ0NS10b2tlbg=="
   }
 }

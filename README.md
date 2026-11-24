@@ -11,7 +11,7 @@
 
 ## Credentials File
 
-The repository includes an `example-auth.json` template with placeholder values. Copy it to a local credentials file and replace the placeholders with your RT credentials. Its structure is:
+The repository includes an `example-auth.json` template with placeholder values. Copy it to a local credentials file and replace the placeholders with your RT credentials. The RT4 `password` and RT5 `token` values in this file must be Base64-encoded UTF-8 strings; the `name` and `url` values remain plain text. Its structure is:
 
 ```json
 {
@@ -27,7 +27,23 @@ The repository includes an `example-auth.json` template with placeholder values.
 }
 ```
 
-Use `--auth-file example-auth.json` (or your local credentials file) with either queue audit script. The RT 4.4.3 `name` is the login username; each `url` is the server base URL, optionally including an installation path. Keep real credentials out of version control.
+Use `--auth-file example-auth.json` (or your local credentials file) with either queue audit script. The RT 4.4.3 `name` is the login username; each `url` is the server base URL, optionally including an installation path. Base64 is an encoding, not encryption; protect the credentials file and keep real credentials out of version control.
+
+Generate the encoded values from the plain-text password or token. In PowerShell:
+
+```powershell
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('your-rt4-password'))
+[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('your-rt5-token'))
+```
+
+In Bash, with GNU `base64`:
+
+```bash
+printf %s 'your-rt4-password' | base64
+printf %s 'your-rt5-token' | base64
+```
+
+Paste each result into the corresponding `password` or `token` field in your local JSON file. The scripts decode those fields before authenticating. Existing `--password` and `--token` command-line options continue to accept plain-text values.
 
 ## RT 4.4.3
 
@@ -43,7 +59,7 @@ To read connection details and credentials from `example-auth.json` instead:
 python rt_queue_audit_rt44.py "General" --auth-file example-auth.json --output rt44-report.json
 ```
 
-The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings.
+The queue may also be specified by numeric ID. If the password is omitted, the script prompts for it. As with the RT 5 script, supplying `--password` is supported but can expose it in shell history or process listings. The RT 4.4.3 request connect/read timeout defaults to 300 seconds for large tickets; override it with `--timeout` if needed.
 
 Add `--debug` to print request paths and HTTP/RT response statuses to standard error while the report is generated. Debug output does not include credentials, cookies, or response bodies.
 
@@ -105,7 +121,7 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 | `--server` | Required RT hostname or base URL. A missing scheme defaults to HTTPS. |
 | `--token` | Required RT authentication token. |
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
-| `--timeout` | HTTP timeout in seconds; defaults to `60` for both audit scripts. |
+| `--timeout` | HTTP connect/read timeout in seconds; defaults to `300` for RT 4.4.3 and `60` for RT 5.0.10. |
 | `--debug` | Log the selected auth source (secrets redacted), request paths/statuses, timestamps, and ticket/attachment progress to standard error. |
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
 
@@ -148,7 +164,7 @@ The JSON report includes queue details and a ticket entry for each matching tick
 
 When comparing systems, changes are considered only through the other system's ticket `last_updated` time. Reply/comment updates and attachments added after that time are excluded for missing-item checks, in both comparison directions. Attachment counts are computed from the attachments within that comparison window.
 
-Both audit scripts stream each completed ticket directly to the output rather than retaining the full report in memory. Summary counts and sizes are written when processing finishes. If an error occurs after output has started, the scripts close the JSON structure and mark it with `"complete": false` plus an `error` message; tickets completed before the failure remain available. A normally finished report has `"complete": true`.
+Both audit scripts stream each completed ticket directly to the output rather than retaining the full report in memory. Summary counts and sizes are written when processing finishes. If an error occurs after output has started, the scripts close the JSON structure and mark it with `"complete": false` plus an `error` message; tickets completed before the failure remain available. A normally finished report has `"complete": true`. The RT 4.4.3 request connect/read timeout defaults to 300 seconds; RT 5.0.10 defaults to 60 seconds.
 
 When `--output` is used, each script creates a checkpoint file beside the report, named `<output>.state.json`. To continue an interrupted run, repeat the same command with `--resume`:
 

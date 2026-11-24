@@ -370,7 +370,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, help="write JSON to this file instead of stdout")
     parser.add_argument("--state-file", type=Path, help="checkpoint path (defaults to OUTPUT.state.json)")
     parser.add_argument("--resume", action="store_true", help="resume from the output and state files")
-    parser.add_argument("--timeout", type=int, default=60, help="HTTP timeout in seconds (default: 60)")
+    parser.add_argument("--timeout", type=int, default=300, help="HTTP connect/read timeout in seconds (default: 300)")
     parser.add_argument("--debug", action="store_true", help="log REST request paths and response statuses to standard error")
     parser.add_argument(
         "-k", "--insecure", action="store_true",

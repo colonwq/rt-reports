@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,16 @@ def load_auth(path: Path, system: str) -> dict[str, str]:
     missing = [key for key in fields[system] if not isinstance(section.get(key), str) or not section[key].strip()]
     if missing:
         raise AuthConfigError(f"{path}: {system} is missing required field(s): {', '.join(missing)}")
-    return {key: section[key].strip() for key in fields[system]}
+    credentials = {key: section[key].strip() for key in fields[system]}
+    credential_field = "password" if system == "rt4" else "token"
+    try:
+        encoded = credentials[credential_field].encode("ascii")
+        credentials[credential_field] = base64.b64decode(encoded, validate=True).decode("utf-8")
+    except (UnicodeEncodeError, binascii.Error, UnicodeDecodeError):
+        raise AuthConfigError(
+            f"{path}: {system}.{credential_field} must be a Base64-encoded UTF-8 value"
+        ) from None
+    return credentials
 
 
 def redacted_url(value: str) -> str:
