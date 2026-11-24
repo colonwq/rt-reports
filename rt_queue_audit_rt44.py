@@ -19,7 +19,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, HTTPCookieProcessor, Request, build_opener
 from rt_report_writer import JSONReportWriter
-from rt_auth import load_auth
+from rt_auth import load_auth, redacted_url
 
 
 API_SUFFIX = "/REST/1.0"
@@ -261,6 +261,11 @@ def ticket_attachments(
             "md5": checksum,
             "error": content_error or detail_error,
         })
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}/attachment/{attachment_id}",
+            f"filename={detail.get('Filename')!r}, created={detail.get('Created')!r}, size_bytes={size_bytes}, md5={checksum}, error={content_error or detail_error!r}",
+        )
     return results
 
 
@@ -291,6 +296,11 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
             "content_md5": md5_hex(content_bytes) if content_bytes is not None else None,
             "content_size_bytes": len(content_bytes) if content_bytes is not None else None,
         })
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}/transaction/{update_id}",
+            f"type={update_type!r}, created={fields.get('Created')!r}, content_available={content_bytes is not None}",
+        )
         if update_id is None or content_bytes is None:
             complete = False
         else:
@@ -325,6 +335,11 @@ def build_report(client: RTClient, queue_arg: str, writer: JSONReportWriter) -> 
         fields = parse_fields(client.get_text(f"ticket/{quote(ticket_id, safe='')}/show"))
         attachments = ticket_attachments(client, ticket_id)
         updates, updates_md5 = ticket_updates(client, ticket_id)
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}",
+            f"created={fields.get('Created')!r}, last_updated={fields.get('LastUpdated')!r}, attachments={len(attachments)}, reply_comment_updates={len(updates)}",
+        )
         writer.write_ticket({
             "id": ticket_id,
             "subject": fields.get("Subject"),
@@ -375,6 +390,13 @@ def main() -> int:
             raise RTError("provide --auth-file with rt4 credentials, or both --server and --username")
         if password is None:
             password = getpass.getpass("RT password: ")
+        if args.debug:
+            print(f"DEBUG auth file: {args.auth_file if args.auth_file else '(not used; command-line credentials)'}", file=sys.stderr)
+            print(f"DEBUG server: {redacted_url(server)} (source: {'--server' if args.server else '--auth-file'})", file=sys.stderr)
+            print(f"DEBUG username: {username!r} (source: {'--username' if args.username else '--auth-file'})", file=sys.stderr)
+            print(f"DEBUG password: supplied and redacted (source: {'--password' if args.password is not None else '--auth-file' if auth.get('password') else 'interactive prompt'})", file=sys.stderr)
+            print(f"DEBUG queue: {args.queue}; timeout: {args.timeout}s; insecure TLS: {args.insecure}", file=sys.stderr)
+            print(f"DEBUG output: {args.output if args.output else 'standard output'}; resume: {args.resume}", file=sys.stderr)
         if args.resume and args.output is None:
             raise RTError("--resume requires --output")
         if args.state_file is not None and args.output is None:

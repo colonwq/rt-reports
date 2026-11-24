@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class AuthConfigError(ValueError):
@@ -31,3 +32,16 @@ def load_auth(path: Path, system: str) -> dict[str, str]:
     if missing:
         raise AuthConfigError(f"{path}: {system} is missing required field(s): {', '.join(missing)}")
     return {key: section[key].strip() for key in fields[system]}
+
+
+def redacted_url(value: str) -> str:
+    candidate = value if "://" in value else "https://" + value
+    parsed = urlsplit(candidate)
+    host = parsed.hostname or "<invalid-host>"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        port = ""
+    return f"{parsed.scheme}://{host}{port}{parsed.path}"

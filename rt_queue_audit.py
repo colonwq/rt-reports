@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPSHandler, Request, build_opener
 from rt_report_writer import JSONReportWriter
-from rt_auth import load_auth
+from rt_auth import load_auth, redacted_url
 
 
 API_SUFFIX = "/REST/2.0"
@@ -31,7 +31,7 @@ class RTError(Exception):
 
 
 class RTClient:
-    def __init__(self, server: str, token: str, timeout: int, insecure: bool) -> None:
+    def __init__(self, server: str, token: str, timeout: int, insecure: bool, debug: bool = False) -> None:
         if "://" not in server:
             server = "https://" + server
         parsed = urlsplit(server.rstrip("/"))
@@ -44,13 +44,19 @@ class RTClient:
         self.api_base = root if root.lower().endswith(API_SUFFIX.lower()) else root + API_SUFFIX
         self.token = token
         self.timeout = timeout
+        self.debug = debug
         handlers = [HTTPSHandler(context=ssl._create_unverified_context())] if insecure else []
         self.opener = build_opener(*handlers)
+
+    def log_debug(self, method: str, path: str, message: str) -> None:
+        if self.debug:
+            print(f"DEBUG {method} {path}: {message}", file=sys.stderr)
 
     def get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = self.api_base + "/" + path.lstrip("/")
         if params:
             url += "?" + urlencode(params, doseq=True)
+        self.log_debug("GET", urlsplit(url).path, "requesting JSON")
         return self._request_json(url)
 
     def _request_json(self, url: str) -> Any:
@@ -64,9 +70,11 @@ class RTClient:
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
+                status = response.status
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             endpoint = urlsplit(url).path
+            self.log_debug(request.get_method(), endpoint, f"HTTP {exc.code} error response")
             hint = (
                 " Check that the token is valid, active, unexpired, and that RT or its web server passes the Authorization header through."
                 if exc.code == 401
@@ -77,7 +85,10 @@ class RTClient:
                 f"{detail}.{hint}"
             ) from None
         except URLError as exc:
+            self.log_debug(request.get_method(), urlsplit(url).path, f"connection error: {exc.reason}")
             raise RTError(f"Could not connect to RT: {exc.reason}") from None
+
+        self.log_debug(request.get_method(), urlsplit(url).path, f"HTTP {status}, {len(payload)} response bytes")
 
         try:
             return json.loads(payload.decode("utf-8"))
@@ -104,6 +115,7 @@ class RTClient:
             if not isinstance(result, dict) or not isinstance(result.get("items"), list):
                 raise RTError(f"Unexpected collection response from {path}")
             page_items = result["items"]
+            self.log_debug("GET", path, f"page {page}: received {len(page_items)} item(s)")
             for item in page_items:
                 if isinstance(item, dict):
                     yield item
@@ -191,6 +203,11 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
             "content_md5": md5_hex(content_bytes) if content_bytes is not None else None,
             "content_size_bytes": len(content_bytes) if content_bytes is not None else None,
         })
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}/transaction/{transaction_id}",
+            f"type={update_type!r}, created={updates[-1]['created']!r}, content_available={content_bytes is not None}",
+        )
         if content_bytes is None:
             all_content_available = False
         else:
@@ -255,6 +272,11 @@ def ticket_attachments(
             "md5": checksum,
             "error": error,
         })
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}/attachment/{attachment_id}",
+            f"filename={attachments[-1]['filename']!r}, created={attachments[-1]['created']!r}, size_bytes={size_bytes}, md5={checksum}, error={error!r}",
+        )
     return attachments
 
 
@@ -286,6 +308,11 @@ def build_report(client: RTClient, queue_arg: str, writer: JSONReportWriter) -> 
         details = client.get_json("ticket/" + quote(ticket_id, safe=""))
         attachments = ticket_attachments(client, ticket_id)
         updates, updates_md5 = ticket_updates(client, ticket_id)
+        client.log_debug(
+            "DATA",
+            f"ticket/{ticket_id}",
+            f"created={details.get('Created', item.get('Created'))!r}, last_updated={details.get('LastUpdated', item.get('LastUpdated'))!r}, attachments={len(attachments)}, reply_comment_updates={len(updates)}",
+        )
         writer.write_ticket({
             "id": ticket_id,
             "subject": details.get("Subject", item.get("Subject")),
@@ -320,6 +347,7 @@ def parse_args() -> argparse.Namespace:
         "-k", "--insecure", action="store_true",
         help="accept HTTPS certificates without validation (insecure; use only when necessary)",
     )
+    parser.add_argument("--debug", action="store_true", help="log auth source, request status, and audit progress to standard error")
     return parser.parse_args()
 
 
@@ -331,6 +359,12 @@ def main() -> int:
         token = args.token or auth.get("token")
         if not server or not token:
             raise RTError("provide --auth-file with rt5 credentials, or both --server and --token")
+        if args.debug:
+            print(f"DEBUG auth file: {args.auth_file if args.auth_file else '(not used; command-line credentials)'}", file=sys.stderr)
+            print(f"DEBUG server: {redacted_url(server)} (source: {'--server' if args.server else '--auth-file'})", file=sys.stderr)
+            print(f"DEBUG token: supplied and redacted (source: {'--token' if args.token else '--auth-file'})", file=sys.stderr)
+            print(f"DEBUG queue: {args.queue}; timeout: {args.timeout}s; insecure TLS: {args.insecure}", file=sys.stderr)
+            print(f"DEBUG output: {args.output if args.output else 'standard output'}; resume: {args.resume}", file=sys.stderr)
         if args.resume and args.output is None:
             raise RTError("--resume requires --output")
         if args.state_file is not None and args.output is None:
@@ -359,7 +393,7 @@ def main() -> int:
                 args.resume,
             )
             try:
-                client = RTClient(server, token, args.timeout, args.insecure)
+                client = RTClient(server, token, args.timeout, args.insecure, args.debug)
                 if urlsplit(client.api_base).scheme != "https":
                     print("Warning: the RT token is being sent without HTTPS.", file=sys.stderr)
                 build_report(client, args.queue, writer)

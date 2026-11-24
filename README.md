@@ -106,6 +106,7 @@ The RT 5 script uses RT's token authentication header (`Authorization: token ...
 | `--token` | Required RT authentication token. |
 | `--output` | Optional path for the JSON report. Without it, JSON is written to standard output. |
 | `--timeout` | HTTP timeout in seconds; defaults to `60` for both audit scripts. |
+| `--debug` | Log the selected auth source (secrets redacted), request paths/statuses, timestamps, and ticket/attachment progress to standard error. |
 | `-k`, `--insecure` | Accept HTTPS certificates without validation. Use only when necessary. |
 
 Audit scripts return `0` on success and `1` on a handled error. The Bash wrappers use this status to decide when to resume.
