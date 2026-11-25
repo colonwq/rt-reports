@@ -23,7 +23,6 @@ from rt_auth import load_auth, redacted_url
 API_SUFFIX = "/REST/2.0"
 PAGE_SIZE = 100
 UPDATE_TYPES = {"correspond", "comment"}
-RT_SYSTEM_CREATORS = {"the rt system itself", "rt_system", "rtsystem"}
 
 
 class RTError(Exception):
@@ -142,17 +141,8 @@ def value_id(value: Any) -> str | None:
     return str(value) if value is not None else None
 
 
-def is_rt_system_status(transaction_type: Any, creator: Any) -> bool:
-    if str(transaction_type or "").strip().casefold() != "status":
-        return False
-    if isinstance(creator, dict):
-        creator_values = (creator.get("id"), creator.get("name"), creator.get("Name"))
-    else:
-        creator_values = (creator,)
-    return any(
-        str(value or "").strip().casefold() in RT_SYSTEM_CREATORS
-        for value in creator_values
-    )
+def is_status_transaction(transaction_type: Any) -> bool:
+    return str(transaction_type or "").strip().casefold() == "status"
 
 
 def load_queue(client: RTClient, queue: str) -> dict[str, Any]:
@@ -171,7 +161,7 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
 
     for entry in history:
         update_type = str(entry.get("Type", entry.get("type", "")))
-        if is_rt_system_status(update_type, entry.get("Creator", entry.get("creator"))):
+        if is_status_transaction(update_type):
             continue
         if update_type.lower() not in UPDATE_TYPES:
             continue
@@ -189,11 +179,6 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
             continue
 
         transaction = client.get_json("transaction/" + quote(transaction_id, safe=""))
-        if isinstance(transaction, dict) and is_rt_system_status(
-            update_type,
-            transaction.get("Creator", transaction.get("creator")),
-        ):
-            continue
         content = transaction.get("Content") if isinstance(transaction, dict) else None
         content_bytes = content.encode("utf-8") if isinstance(content, str) else None
         updates.append({

@@ -30,6 +30,7 @@ def fetch_rt4_ticket(
         raise
     attachments = rt4.ticket_attachments(client, ticket_id, contents)
     updates, updates_md5 = rt4.ticket_updates(client, ticket_id)
+    updates = [update for update in updates if not rt4.is_status_transaction(update.get("type"))]
     return {
         "id": ticket_id,
         "subject": fields.get("Subject"),
@@ -58,6 +59,7 @@ def fetch_rt5_ticket(
         raise rt5.RTError(f"Unexpected ticket response for RT 5 ticket {ticket_id}")
     attachments = rt5.ticket_attachments(client, ticket_id, contents)
     updates, updates_md5 = rt5.ticket_updates(client, ticket_id)
+    updates = [update for update in updates if not rt5.is_status_transaction(update.get("type"))]
     return {
         "id": str(rt5.value_id(details) or ticket_id),
         "subject": details.get("Subject"),

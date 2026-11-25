@@ -176,7 +176,7 @@ For RT 4.4.3, use the same `--resume` option with `rt_queue_audit_rt44.py`. The 
 
 Each attachment record includes its ID, filename, content type, size in bytes, and MD5 checksum. The total attachment count and the sum of available attachment sizes are included at the report level.
 
-Each reply/comment record includes its transaction ID and type, creation time, UTF-8 content size, and MD5 checksum. The ticket-level `reply_comment_content_md5` is an aggregate MD5 of transaction `Content` values encoded as UTF-8 and concatenated in transaction ID order without separators. This aggregate is `null` if RT does not return content for any selected transaction.
+Each reply/comment record includes its transaction ID and type, creation time, UTF-8 content size, and MD5 checksum. Status transactions are excluded regardless of whether RT or a user made the status change. The ticket-level `reply_comment_content_md5` is an aggregate MD5 of transaction `Content` values encoded as UTF-8 and concatenated in transaction ID order without separators. This aggregate is `null` if RT does not return content for any selected transaction.
 
 A `null` individual checksum indicates the content could not be retrieved or MD5 was unavailable. Attachment size may still be reported when RT provides a length even if its content is unavailable. The report contains checksums and metadata, not attachment or reply bodies.
 

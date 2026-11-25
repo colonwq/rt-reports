@@ -25,7 +25,6 @@ from rt_auth import load_auth, redacted_url
 API_SUFFIX = "/REST/1.0"
 FIELD_LINE = re.compile(r"^([^:\r\n]+):(?: ?(.*))?$")
 UPDATE_TYPES = {"correspond", "comment"}
-RT_SYSTEM_CREATORS = {"the rt system itself", "rt_system", "rtsystem"}
 
 
 class RTError(Exception):
@@ -147,17 +146,8 @@ def md5_hex(data: bytes) -> str | None:
         return None
 
 
-def is_rt_system_status(transaction_type: Any, creator: Any) -> bool:
-    if str(transaction_type or "").strip().casefold() != "status":
-        return False
-    if isinstance(creator, dict):
-        creator_values = (creator.get("id"), creator.get("name"), creator.get("Name"))
-    else:
-        creator_values = (creator,)
-    return any(
-        str(value or "").strip().casefold() in RT_SYSTEM_CREATORS
-        for value in creator_values
-    )
+def is_status_transaction(transaction_type: Any) -> bool:
+    return str(transaction_type or "").strip().casefold() == "status"
 
 
 def ticket_ids(search_response: str) -> list[str]:
@@ -280,7 +270,7 @@ def ticket_updates(client: RTClient, ticket_id: str) -> tuple[list[dict[str, Any
 
     for fields in history_records(response):
         update_type = fields.get("Type", "")
-        if is_rt_system_status(update_type, fields.get("Creator")):
+        if is_status_transaction(update_type):
             continue
         if update_type.lower() not in UPDATE_TYPES:
             continue
